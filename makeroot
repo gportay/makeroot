@@ -1,0 +1,176 @@
+#!/bin/bash
+#
+# Copyright 2020 Gaël PORTAY
+#
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+
+set -e
+set -u
+set -o pipefail
+
+VERSION="1.0"
+
+run() {
+	if [[ ${dryrun:-} ]]
+	then
+		echo "${@// /\\ }" >&2
+		return
+	fi
+
+	eval "$@"
+}
+
+run_fakechroot() {
+	run "${fake[@]:-}" "$@"
+}
+
+run_debootstrap() {
+	local opts
+	local cmd_subst
+
+	cmd_subst=()
+	cmd_subst+=(/var/lib/dpkg/info/cron.postinst=/bin/true)
+	cmd_subst+=(/var/lib/dpkg/info/base-passwd.postinst=/bin/true)
+	FAKECHROOT_CMD_SUBST="${FAKECHROOT_CMD_SUBST:+$FAKECHROOT_CMD_SUBST:}$(IFS=$':'; printf "%s" "${cmd_subst[*]}")"
+	export FAKECHROOT_CMD_SUBST
+
+	if [[ "$#" -gt 0 ]]
+	then
+		opts+=(--include="$(IFS=$','; printf "%s" "$*")")
+	fi
+
+	if [[ "${arch:-}" ]]
+	then
+		opts+=(--arch="$arch")
+		opts+=(--foreign)
+	fi
+
+	if [[ "${release:-}" ]]
+	then
+		opts+=("$release")
+	else
+		opts+=(stable)
+	fi
+
+	opts+=("$rootfs")
+
+	if [[ "${mirror:-}" ]]
+	then
+		opts+=("$mirror")
+	else
+		opts+=(http://deb.debian.org/debian)
+	fi
+
+	run_fakechroot debootstrap "${opts[@]}"
+}
+
+usage() {
+	cat <<EOF
+Usage: ${0##*/} [OPTIONS] ROOTFS [PACKAGES...]
+
+Options:
+      --release NAME            Set the release.
+      --arch ARCH               Set the architecture.
+      --mirror URL              Set the mirror.
+      --no-fake                 Do not fake; disable fakechroot/fakeroot.
+      --dry-run                 Do nothing; echo command.
+      -V or --version           Print version.
+      -h or --help              Print usage.
+EOF
+}
+
+declare -A DEBARCHS QEMUARCHS
+DEBARCHS[x86_64]="amd64"
+DEBARCHS[aarch64]="arm64"
+QEMUARCHS[amd64]="x86_64"
+QEMUARCHS[armhf]="arm"
+QEMUARCHS[arm64]="aarch64"
+
+# Deduce architecture from scriptname or defaults to host architecture
+hostarch="$(uname -m)"
+arch="${0##*/}"
+arch="${arch%%-*}"
+if [[ $arch == ${0##*/} ]]
+then
+	arch=
+fi
+
+opts=()
+fake=(fakechroot -- fakeroot)
+while [[ "$#" -ne 0 ]]
+do
+	if [[ "$1" == "-h" ]] || [[ "$1" == "--help" ]]
+	then
+		usage
+		exit 0
+	elif [[ "$1" == "-V" ]] || [[ "$1" == "--version" ]]
+	then
+		echo "$VERSION"
+		exit
+	elif [ "$1" = "--release" ]
+	then
+		shift
+		release="$1"
+	elif [ "$1" = "--arch" ]
+	then
+		shift
+		arch="$1"
+	elif [ "$1" = "--mirror" ]
+	then
+		shift
+		mirror="$1"
+	elif [ "$1" = "--dry-run" ]
+	then
+		dryrun=1
+	elif [ "$1" = "--no-fake" ]
+	then
+		fake=()
+	elif [[ "$1" = "--" ]]
+	then
+		shift
+		opts+=("$@")
+		break
+	elif [[ ! "${rootfs:-}" ]]
+	then
+		rootfs="$1"
+	else
+		opts+=("$@")
+		break
+	fi
+	shift
+done
+
+if [[ "$arch" ]]
+then
+	arch="${DEBARCHS[$arch]:-$arch}"
+fi
+hostarch="${DEBARCHS[$hostarch]:-$hostarch}"
+
+# Needs emulation?
+if [[ "${arch:-$hostarch}" == "$hostarch" ]]
+then
+	arch=
+else
+	echo "Cross-architecture: build=$hostarch, target=$arch!" >&2
+	qemuarch="${QEMUARCHS[$arch]:-$arch}"
+	if ! static_qemu="$(command -v "qemu-$qemuarch-static")"
+	then
+		echo "$qemuarch: Invalid architecture or No such emulator" >&2
+		exit 1
+	fi
+
+	if [[ ! ${dryrun:-} ]]
+	then
+		mkdir -p "$rootfs/usr/bin/"
+		cp "$static_qemu" "$rootfs/usr/bin/"
+		trap 'rm -f "$rootfs/usr/bin/$static_qemu"' 0
+	fi
+
+	QEMU_LD_PREFIX="$PWD/$rootfs"
+	export QEMU_LD_PREFIX
+fi
+
+set -- "${opts[@]}"
+
+run_debootstrap "$@"
