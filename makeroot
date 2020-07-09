@@ -44,6 +44,7 @@ run_debootstrap() {
 	then
 		opts+=(--arch="$arch")
 		opts+=(--foreign)
+		opts+=(--variant=fakechroot)
 	fi
 
 	if [[ "${release:-}" ]]
@@ -65,11 +66,44 @@ run_debootstrap() {
 	run_fakechroot debootstrap "${opts[@]}"
 }
 
+run_dnf() {
+	local opts
+	opts=(--releasever="${release:-32}" --assumeyes --installroot="$PWD/$rootfs")
+
+	if [[ "${arch:-}" ]]
+	then
+		opts+=(--forcearch="$arch")
+	fi
+
+	if [[ ! ${dryrun:-} ]]
+	then
+		mkdir -p "$rootfs/etc/distro.repos.d/"
+		cat <<EOF >"$rootfs/etc/distro.repos.d/fedora.repo"
+[fedora]
+name=Fedora \$releasever - \$basearch
+#baseurl=http://download.example/pub/fedora/linux/releases/\$releasever/Everything/\$basearch/os/
+metalink=${mirror:-https://mirrors.fedoraproject.org/metalink?repo=fedora-\$releasever&arch=\$basearch}
+enabled=1
+countme=1
+metadata_expire=7d
+repo_gpgcheck=0
+type=rpm
+gpgcheck=0
+gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-fedora-\$releasever-\$basearch
+skip_if_unavailable=False
+EOF
+	fi
+
+	run_fakechroot dnf "${opts[@]}" group install "${@:-minimal-environment}"
+	rm -f "$rootfs/etc/distro.repos.d/fedora.repo"
+}
+
 usage() {
 	cat <<EOF
 Usage: ${0##*/} [OPTIONS] ROOTFS [PACKAGES...]
 
 Options:
+      --distro NAME             Set the distro.
       --release NAME            Set the release.
       --arch ARCH               Set the architecture.
       --mirror URL              Set the mirror.
@@ -97,6 +131,7 @@ then
 fi
 
 opts=()
+distro="debian"
 fake=(fakechroot -- fakeroot)
 while [[ "$#" -ne 0 ]]
 do
@@ -108,6 +143,10 @@ do
 	then
 		echo "$VERSION"
 		exit
+	elif [ "$1" = "--distro" ]
+	then
+		shift
+		distro="$1"
 	elif [ "$1" = "--release" ]
 	then
 		shift
@@ -141,11 +180,15 @@ do
 	shift
 done
 
-if [[ "$arch" ]]
+# Needs architecture translation?
+if [[ "$distro" == debian ]]
 then
-	arch="${DEBARCHS[$arch]:-$arch}"
+	if [[ "$arch" ]]
+	then
+		arch="${DEBARCHS[$arch]:-$arch}"
+	fi
+	hostarch="${DEBARCHS[$hostarch]:-$hostarch}"
 fi
-hostarch="${DEBARCHS[$hostarch]:-$hostarch}"
 
 # Needs emulation?
 if [[ "${arch:-$hostarch}" == "$hostarch" ]]
@@ -173,4 +216,15 @@ fi
 
 set -- "${opts[@]}"
 
-run_debootstrap "$@"
+case "$distro" in
+debian)
+	run_debootstrap "$@"
+	;;
+fedora)
+	run_dnf "$@"
+	;;
+*)
+	echo "$distro: No such distro" >&2
+	exit 1
+	;;
+esac
