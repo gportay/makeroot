@@ -115,6 +115,29 @@ run_pacstrap() {
 	run_fakechroot pacstrap "${opts[@]}" "$rootfs" "$@" --gpgdir "$rootfs/etc/pacman.d/gnupg" --dbpath "$rootfs/var/lib/pacman"
 }
 
+run_alpine_make_rootfs() {
+	local opts
+	opts=()
+
+	if [[ "${arch:-}" ]]
+	then
+		APK_OPTS="--arch \"$arch\" --no-progress"
+		export APK_OPTS
+	fi
+
+	if [[ "${mirror:-}" ]]
+	then
+		opts+=(--mirror-uri "$mirror")
+	fi
+
+	if [[ "$#" -gt 0 ]]
+	then
+		opts+=(--packages "\"${*:-}\"")
+	fi
+
+	run_fakechroot alpine-make-rootfs "${opts[@]}" "$rootfs"
+}
+
 usage() {
 	cat <<EOF
 Usage: ${0##*/} [OPTIONS] ROOTFS [PACKAGES...]
@@ -239,6 +262,9 @@ debian)
 	;;
 fedora)
 	run_dnf "$@"
+	;;
+alpinelinux)
+	run_alpine_make_rootfs "$@"
 	;;
 archlinux)
 	run_pacstrap "$@"
