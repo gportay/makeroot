@@ -98,6 +98,23 @@ EOF
 	rm -f "$rootfs/etc/distro.repos.d/fedora.repo"
 }
 
+run_pacstrap() {
+	local opts
+	opts=(-GM)
+
+	if [[ "${conf:-}" ]]
+	then
+		opts+=(-C "$conf")
+	fi
+
+	if [[ "${arch:-}" ]]
+	then
+		opts+=(--arch="$arch")
+	fi
+
+	run_fakechroot pacstrap "${opts[@]}" "$rootfs" "$@" --gpgdir "$rootfs/etc/pacman.d/gnupg" --dbpath "$rootfs/var/lib/pacman"
+}
+
 usage() {
 	cat <<EOF
 Usage: ${0##*/} [OPTIONS] ROOTFS [PACKAGES...]
@@ -222,6 +239,9 @@ debian)
 	;;
 fedora)
 	run_dnf "$@"
+	;;
+archlinux)
+	run_pacstrap "$@"
 	;;
 *)
 	echo "$distro: No such distro" >&2
