@@ -56,3 +56,7 @@ debarchs-tests:
 run-alpinelinux run-archlinux run-debian run-fedora:
 run-%:
 	bash makeroot $(MAKEROOTFLAGS) --distro $* rootfs-$* $($*_PACKAGES)
+
+chroot-alpinelinux chroot-archlinux chroot-debian chroot-fedora:
+chroot-%:
+	fakechroot -- fakeroot -- chroot rootfs-$* /bin/sh
